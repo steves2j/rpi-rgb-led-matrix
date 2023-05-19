@@ -92,18 +92,19 @@ private:
 
 class MirrorPixelMapper : public PixelMapper {
 public:
-  MirrorPixelMapper() : horizontal_(true) {}
+  MirrorPixelMapper() : parallel_(1), horizontal_(true), invert_(false) {}
 
   virtual const char *GetName() const { return "Mirror"; }
 
   virtual bool SetParameters(int chain, int parallel, const char *param) {
+    parallel_ = parallel;
     if (param == NULL || strlen(param) == 0) {
       horizontal_ = true;
       return true;
     }
     if (strlen(param) != 1) {
       fprintf(stderr, "Mirror parameter should be a single "
-              "character:'V' or 'H'\n");
+              "character:'V' or 'H' or 'I'\n");
     }
     switch (*param) {
     case 'V':
@@ -114,8 +115,13 @@ public:
     case 'h':
       horizontal_ = true;
       break;
+    case 'I':
+    case 'i':
+      invert_ = true;
+      fprintf(stderr, "Inverting Parallel panels\n");
+      break;
     default:
-      fprintf(stderr, "Mirror parameter should be either 'V' or 'H'\n");
+      fprintf(stderr, "Mirror parameter should be either 'V' or 'H' or 'I'\n");
       return false;
     }
     return true;
@@ -126,13 +132,26 @@ public:
     const {
     *visible_height = matrix_height;
     *visible_width = matrix_width;
+    const int panel_height=matrix_height/parallel_;
+    fprintf(stderr,"Panel_Height : %d\n",panel_height);
     return true;
   }
 
   virtual void MapVisibleToMatrix(int matrix_width, int matrix_height,
                                   int x, int y,
                                   int *matrix_x, int *matrix_y) const {
-    if (horizontal_) {
+    if (invert_ && parallel_>1){
+      const int panel_height=matrix_height/parallel_;
+      *matrix_x = x;
+      if (parallel_==2) {
+        if (y<panel_height) *matrix_y=y+panel_height;
+        else *matrix_y=y-panel_height;
+      } else if (parallel_==3){
+        if (y<panel_height) *matrix_y=y+panel_height*2;
+        else if ((y>=panel_height) && (y<panel_height*2)) *matrix_y=y;
+        else if (y>panel_height*2) *matrix_y=y-panel_height*2;
+      } else *matrix_y=y;
+    } else if (horizontal_) {
       *matrix_x = matrix_width - 1 - x;
       *matrix_y = y;
     } else {
@@ -143,6 +162,8 @@ public:
 
 private:
   bool horizontal_;
+  bool invert_;
+  int parallel_;
 };
 
 // If we take a long chain of panels and arrange them in a U-shape, so
@@ -186,6 +207,7 @@ public:
     const {
     *visible_width = (matrix_width / 64) * 32;   // Div at 32px boundary
     *visible_height = 2 * matrix_height;
+    fprintf(stderr, "%s visible Width=%d Height=%d\n", GetName(), *visible_width, *visible_height);
     if (matrix_height % parallel_ != 0) {
       fprintf(stderr, "%s For parallel=%d we would expect the height=%d "
               "to be divisible by %d ??\n",
@@ -217,7 +239,66 @@ private:
   int parallel_;
 };
 
+// arrange in an S-shape
+//    [<][<] }----- Raspberry Pi connector
+//    [>][>]
+//    [<][<]
+class SArrangementMapper : public PixelMapper {
+public:
+  SArrangementMapper() : chain_(1), parallel_(1), rowlen_(5) {}
 
+  virtual const char *GetName() const { return "S-mapper"; }
+
+  virtual bool SetParameters(int chain, int parallel, const char *param) {
+    chain_ = chain;
+    parallel_ = parallel;
+    char *errpos;
+    const int rowlen  = strtol(param, &errpos, 10);
+    if (*errpos != '\0') {
+      fprintf(stderr, "Invalid No of Rows parameter '%s'\n", param);
+      return false;
+    }
+    rowlen_=rowlen;
+    return true;
+  }
+
+  virtual bool GetSizeMapping(int matrix_width, int matrix_height, int *visible_width, int *visible_height) const {
+    *visible_width  = matrix_width / rowlen_; //->64
+    *visible_height = matrix_height  * rowlen_; //leftover height
+    fprintf(stderr, "%s visible width=%d height=%d\nChain=%d\nMatrix width=%d height=%d\n", GetName(), *visible_width, *visible_height,chain_,matrix_width,matrix_height);
+
+    return true;
+  }
+
+  virtual void MapVisibleToMatrix(int matrix_width, int matrix_height,
+                                  int x, int y,
+                                  int *matrix_x, int *matrix_y) const {
+    //we're being given x,y in final arranged S-shaped coordinates (visible_*).
+    // this calculates that matrix_x,y in the raw stretched-out matrix_width,height space
+
+    const int visible_w  = matrix_width / rowlen_; //64 get the long-side width of each panel
+    const int visible_h = (matrix_height * rowlen_) / parallel_;
+    const int panel_h = matrix_height / parallel_; //32 get the short-side height of each panel
+
+    const int para_offset = (y/visible_h)*panel_h;
+    const int base_y = (y % visible_h) / panel_h; //the index of which panel we're in vertically (in arranged space)
+    const int mod_y = (y % visible_h) % panel_h;  //where we are in this panel
+    const int x_y = ((base_y % 2)? (panel_h - 1 - mod_y) : mod_y)+para_offset;
+    //const int bx=base_y*visible_w;
+    const int x_x = (base_y * visible_w) + ((base_y % 2)? (visible_w - 1 - x) : x);
+
+    //if (x==0)fprintf(stderr,"x:%d y:%d base_y:%d mod_y:%d x_x:%d x_y:%d %d %d\n",x,y,base_y,mod_y,x_x,x_y,para_offset,bx);
+
+    //*matrix_y = (base_y % 2)? (panel_h - 1 - mod_y) : mod_y; //tall 'arranged' display -> wide short, reversing every other
+    //*matrix_x = (base_y * visible_w) + ((base_y % 2)? (visible_w - 1 - x) : x); //x shifted by y's index, also reversed 2n
+    *matrix_y = x_y;
+    *matrix_x = x_x;
+    //if (x==0)fprintf(stderr, "(%d,%d)-(%d,%d)\n", x, y, *matrix_x, *matrix_y);
+  }
+
+private:
+  int chain_, parallel_, rowlen_;
+};
 
 class VerticalMapper : public PixelMapper {
 public:
@@ -269,6 +350,7 @@ public:
     *matrix_y = y_panel_start + (needs_flipping
                                  ? panel_height - 1 - y_within_panel
                                  : y_within_panel);
+    fprintf(stderr, "(%d,%d)-(%d,%d)\n", x, y, *matrix_x, *matrix_y);
   }
 
 private:
@@ -294,6 +376,8 @@ static MapperByName *CreateMapperMap() {
   // Register all the default PixelMappers here.
   RegisterPixelMapperInternal(result, new RotatePixelMapper());
   RegisterPixelMapperInternal(result, new UArrangementMapper());
+  RegisterPixelMapperInternal(result, new SArrangementMapper());
+
   RegisterPixelMapperInternal(result, new VerticalMapper());
   RegisterPixelMapperInternal(result, new MirrorPixelMapper());
   return result;

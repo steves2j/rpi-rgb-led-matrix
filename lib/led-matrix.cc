@@ -644,7 +644,7 @@ RGBMatrix *RGBMatrix::CreateFromOptions(const RGBMatrix::Options &options,
   }
 
   // For the Pi4, we might need 2, maybe up to 4. Let's open up to 5.
-  if (runtime_options.gpio_slowdown < 0 || runtime_options.gpio_slowdown > 5) {
+  if (runtime_options.gpio_slowdown < 0 || runtime_options.gpio_slowdown > 50) {
     fprintf(stderr, "--led-slowdown-gpio=%d is outside usable range\n",
             runtime_options.gpio_slowdown);
     return NULL;
